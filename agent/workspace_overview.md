@@ -20,11 +20,12 @@ graph TD
     Src --> HDR[hbot_driver]
     Src --> HS[hbot_simulation]
     Src --> LDS[lds_006_driver]
+    Src --> YDL[ydlidar_x3]
     Src --> NAV[navigation2]
     Src --> SLAM[slam_toolbox]
 
     classDef pkg fill:#1f77b4,stroke:#333,stroke-width:2px,color:#fff;
-    class HB,HD,HDR,HS,LDS,NAV,SLAM pkg;
+    class HB,HD,HDR,HS,LDS,YDL,NAV,SLAM pkg;
 ```
 
 ---
@@ -58,10 +59,39 @@ Under the `src/` directory, the following ROS 2 packages are configured as submo
 * **Key Files**:
   * [hbot_house.launch.py](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_simulation/launch/hbot_house.launch.py): Launches Gazebo, loads a virtual indoor environment (`hbot_house.world`), and spawns the robot description.
 
-### 5. [lds_006_driver](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/lds_006_driver)
-* **Role**: Driver node for the physical LDS-006 LiDAR sensor.
-* **Key Files**:
-  * `src/lds006_laser_publisher.cpp`: Interfaces with the serial LiDAR stream and publishes `sensor_msgs/LaserScan` messages on the `/scan` topic.
+### 5. Lidar drivers — selectable via `LIDAR_MODEL` env var
+[hbot_bringup.launch.py](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_bringup/launch/hbot_bringup.launch.py)'s
+lidar `IncludeLaunchDescription` is picked at launch time by `LIDAR_MODEL`
+(same `os.environ.get(...)` pattern as `CONTROLLER`; exported with a default
+by [scripts/bringup.sh](file:///home/huy/Documents/03.MyProjects/hbot_ws/scripts/bringup.sh)), not a launch argument, since the physical sensor
+attached to the robot doesn't change between launches of the same machine.
+* **`LIDAR_MODEL=lds01`** (`hbot_bringup.launch.py`'s own internal fallback
+  if `LIDAR_MODEL` is unset entirely — `scripts/ros_env.sh` overrides this
+  with `ydlidar_x3` as the workspace default, see below): the LDS-01
+  (Turtlebot3-compatible) unit, driven by the apt-installed
+  `hls_lfcd_lds_driver` package (`port:=/dev/usbttl`) — not a package in
+  this workspace.
+* **[lds_006_driver](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/lds_006_driver)**:
+  submodule driver for the older LDS-006 unit (`src/lds006_laser_publisher.cpp`,
+  publishes `sensor_msgs/LaserScan` on `/scan`); currently unused —
+  `hbot_bringup.launch.py` has its include commented out in favor of LDS-01.
+* **`LIDAR_MODEL=ydlidar_x3` (current default)**: the YDLidar X3 Pro,
+  driven by `ydlidar_ros2_driver`
+  (`launch/x3_ydlidar_launch.py`, params `params/ydlidar_x3.yaml`, port
+  `/dev/usbttl`), nested together with its C++ SDK dependency
+  (`YDLidar-SDK-master`) inside the
+  [ydlidar_x3](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/ydlidar_x3)
+  submodule (`git@github.com:HbotVN/ydlidar-ros2-driver.git`, registered in
+  `.gitmodules`). The SDK is a bare CMake project with no `package.xml` —
+  it's meant to be built/installed standalone
+  (`cmake && make && sudo make install`, not through colcon) so its
+  `COLCON_IGNORE` keeps colcon from racing it against
+  `ydlidar_ros2_driver`'s `find_package(ydlidar_sdk)`. See
+  [docs/ydlidar_x3_lidar.md](../docs/ydlidar_x3_lidar.md) for the full
+  setup guide, and
+  [walkthrough.md](walkthrough.md#2026-08-24-ydlidar-x3-pro-added-alongside-lds-01-selectable-via-lidar_model)
+  for the history (including the Humble launch-API fixes made to
+  `x3_ydlidar_launch.py` and the `params_file` override bug).
 
 ### 6. [navigation2](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/navigation2) & [slam_toolbox](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/slam_toolbox)
 * **Role**: Standard localization, mapping, and path planning components customized or referenced for this robot.
@@ -70,7 +100,7 @@ Under the `src/` directory, the following ROS 2 packages are configured as submo
 * **Role**: Flask-SocketIO web dashboard — joystick teleop, telemetry (battery/odom/scan), map viewer with Nav2 pose-estimate/goal-setting tools, saved-map management (SQLite), and WiFi AP/STA control via `nmcli`.
 * **Key Files**:
   * [web_node.py](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_web/hbot_web/web_node.py): the ROS 2 node + Flask/SocketIO server in one process. Publishes teleop `cmd_vel`, `initialpose`, and `goal_pose`; subscribes `odom`, `battery_voltage`, `scan`, `map`, `amcl_pose`, and Nav2's global `plan` (re-emitted to the browser as `plan_status` for the path overlay). `ROSLaunchManager` switches the robot between mapping/navigation/idle by shelling out to the scripts below.
-  * `scripts/start_mapping.sh` / `start_navigation.sh`: thin wrappers around `ros2 launch hbot_bringup hbot_bringup.launch.py ...` that `ROSLaunchManager` execs, each logging to its own timestamped file under `~/hbot_ws/log/`.
+  * `scripts/start_mapping.sh` / `start_navigation.sh`: thin wrappers around `ros2 launch hbot_bringup hbot_bringup.launch.py ...` that `ROSLaunchManager` execs (via `subprocess.Popen`, no `env=` override — full inheritance), each logging to its own timestamped file under `~/hbot_ws/log/`. Normally inherit an already-sourced ROS environment from `hbot_web_node` (started via [web_bringup.sh](file:///home/huy/Documents/03.MyProjects/hbot_ws/scripts/web_bringup.sh)), detected via `LIDAR_MODEL` as a marker; fall back to explicitly sourcing [scripts/ros_env.sh](file:///home/huy/Documents/03.MyProjects/hbot_ws/scripts/ros_env.sh) via `$HBOT_WS` otherwise, erroring loudly if that's unset too rather than silently launching with wrong defaults — see [walkthrough.md](walkthrough.md#2026-08-25-follow-up-made-start_mappingshstart_navigationsh-self-sufficient).
   * [templates/index.html](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_web/hbot_web/templates/index.html) + [static/js/main.js](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_web/hbot_web/static/js/main.js): canvas joystick, map canvas (with a live Nav2 global-path overlay and "2D Pose Estimate"/"Set Goal" click-drag tools, mutually exclusive, "Set Goal" gated to navigation mode), Socket.IO bindings, WiFi modals.
   * `hbot_maps.db` (SQLite, under `MAPS_DIR`): saved-map registry (name, YAML/PGM paths, active flag).
 
@@ -98,7 +128,7 @@ From [hbot.urdf.xacro](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot
 Forces the system's python executable (`/usr/bin/python3`) and environment configs to avoid conflicts with virtual/conda environment python installations when invoking `colcon build`.
 
 ### 🚀 Bringup Script (`bringup.sh`)
-Wraps the `ros2 launch hbot_bringup hbot_bringup.launch.py` command, sourcing the installation space and pre-defining environmental configurations like `ROS_DOMAIN_ID=9` and `CONTROLLER=yahboom`.
+Wraps the `ros2 launch hbot_bringup hbot_bringup.launch.py` command. Environment setup (`ROS_DOMAIN_ID=9`, `CONTROLLER=yahboom`, `LIDAR_MODEL=ydlidar_x3`, `PATH`/`AMENT_PREFIX_PATH`/`PYTHONPATH`, sourcing ROS + the workspace `install/setup.bash`) lives in shared [scripts/ros_env.sh](file:///home/huy/Documents/03.MyProjects/hbot_ws/scripts/ros_env.sh), sourced via `$HBOT_WS` (exported here) — [scripts/web_bringup.sh](file:///home/huy/Documents/03.MyProjects/hbot_ws/scripts/web_bringup.sh) (production Pi entry point, wraps `base_bringup.launch.py`) sources the same file, so the two can't drift out of sync on env vars/defaults the way they once did.
 
 ### 🗺️ Operational Modes matrix
 

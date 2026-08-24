@@ -413,3 +413,268 @@ by side.
   mode. `drawMap()` now also strokes the live `plan_status` points as an
   orange path overlay on the map canvas, and the overlay/tool state is reset
   whenever the workflow mode leaves `navigation`.
+
+---
+
+## 2026-08-24: YDLidar X3 Pro added alongside LDS-01, selectable via LIDAR_MODEL
+
+- User added `src/lidars/ydlidar_ros2_driver-master` (ROS 2 driver for the
+  YDLidar family) and `src/YDLidar-SDK-master` (the underlying C++ SDK it
+  `find_package()`s) as plain directories, not submodules - they aren't in
+  `.gitmodules`.
+- [hbot_bringup.launch.py](../src/hbot_bringup/launch/hbot_bringup.launch.py):
+  the previously-hardcoded lidar `IncludeLaunchDescription` (the LDS-01 via
+  `hls_lfcd_lds_driver`, with a commented-out LDS-006 alternative) is now
+  chosen by a new `LIDAR_MODEL` env var, following the same
+  `os.environ.get(...)` pattern as the existing `CONTROLLER` var.
+  `LIDAR_MODEL=lds01` (default, unset behaves the same as before) keeps the
+  LDS-01; `LIDAR_MODEL=ydlidar_x3` includes `ydlidar_ros2_driver`'s
+  `x3_ydlidar_launch.py` instead. [scripts/bringup.sh](../scripts/bringup.sh)
+  exports `LIDAR_MODEL` with the same default-if-unset pattern used for
+  `CONTROLLER`.
+- [x3_ydlidar_launch.py](../src/lidars/ydlidar_ros2_driver-master/launch/x3_ydlidar_launch.py):
+  fixed to build/run on Humble - it used a `LifecycleNode` with pre-Foxy
+  launch_ros kwargs (`node_executable`/`node_name`/`node_namespace`, renamed
+  to `executable`/`name`/`namespace` since Foxy) that no longer exist on
+  Humble's launch_ros API. Rewritten as a plain `Node`, which also matches
+  what `ydlidar_ros2_driver_node.cpp` actually is - a plain `rclcpp::Node`
+  that starts scanning as soon as it comes up, not a real lifecycle-managed
+  node. Left out the file's commented `static_transform_publisher` for the
+  `laser` frame, for the same reason the LDS-01 include doesn't add one:
+  `hbot_description`'s URDF already defines `base_link -> laser`, published
+  by `robot_state_publisher`.
+- `src/YDLidar-SDK-master` is a bare CMake project (no `package.xml`);
+  `colcon list` still picks it up as a `(cmake)`-type package named
+  `ydlidar_sdk` purely from its `CMakeLists.txt`. Tried building
+  `ydlidar_sdk`+`ydlidar_ros2_driver` together via `build_packages.sh` -
+  colcon has no declared dependency between them (the SDK carries no
+  `package.xml` to express one) so it builds both in parallel and
+  `ydlidar_ros2_driver`'s `find_package(ydlidar_sdk)` fails the race.
+  Per user direction, the SDK is meant to be built as a standalone C++
+  library instead (`cmake && make && sudo make install` from
+  `src/YDLidar-SDK-master`, installing `ydlidar_sdkConfig.cmake` system-wide
+  the way its own build instructions intend), not through colcon - added
+  `src/YDLidar-SDK-master/COLCON_IGNORE` so colcon skips it entirely and the
+  race can't happen. This system-wide SDK install step hasn't been run yet
+  (needs interactive `sudo`); `ydlidar_ros2_driver` won't colcon-build until
+  it has been.
+
+- Follow-up: `ydlidar_ros2_driver` now builds clean. Two things changed since
+  the previous entry:
+  - You reorganized the lidar drop from `src/lidars/ydlidar_ros2_driver-master`
+    + `src/YDLidar-SDK-master` into a single nested repo
+    `src/ydlidar_x3/` (with `ydlidar_ros2_driver/` and `YDLidar-SDK-master/`
+    inside, one commit `c7ff9a9`) and installed the SDK system-wide
+    (`/usr/local/lib/cmake/ydlidar_sdk/...`) - `ydlidar_ros2_driver.launch.py`
+    edits from the previous entry carried over intact, and
+    `YDLidar-SDK-master/COLCON_IGNORE` came along too so colcon still only
+    sees `ydlidar_ros2_driver` (confirmed via `colcon list`).
+  - [ydlidar_ros2_driver_node.cpp](../src/ydlidar_x3/ydlidar_ros2_driver/src/ydlidar_ros2_driver_node.cpp):
+    fixed 21 call sites of the pattern
+    `node->declare_parameter("x"); node->get_parameter("x", var);` - the
+    argument-less `declare_parameter(name)` overload existed pre-Foxy but was
+    removed from Humble's `rclcpp::Node` API (only overloads that take a
+    default value or explicit `ParameterType` remain), so every one of these
+    failed to compile with "no matching function for call". Each is now
+    `declare_parameter(name, var)`, using the same local variable the very
+    next line already read the resolved value into as the default - the file
+    already initialized that variable to the same default the old code
+    implied, so behavior (including picking up overrides from
+    `ydlidar_x3.yaml`) is unchanged. Preserved the file's original CRLF line
+    endings + UTF-8 BOM (rewrote via a byte-safe script) so the diff is just
+    the 21 changed lines, not a whole-file rewrite.
+  - `./build_packages.sh ydlidar_ros2_driver` now finishes clean (only
+    pre-existing unused-lambda-parameter warnings, no errors); confirmed
+    `ros2 launch ydlidar_ros2_driver x3_ydlidar_launch.py --show-args`
+    resolves its default params file correctly post-install.
+
+---
+
+## 2026-08-25: Fixed YDLidar X3 Pro port override being silently dropped
+
+- Bug: editing `ydlidar_x3.yaml`'s `port` had no effect - the driver kept
+  binding `/dev/ydlidar` (its hardcoded C++ default) regardless.
+- Root cause: `x3_ydlidar_launch.py` declares its own `params_file` launch
+  argument (default: its own `ydlidar_x3.yaml`), but
+  [hbot_bringup.launch.py](../src/hbot_bringup/launch/hbot_bringup.launch.py)
+  *also* declares a top-level `params_file` argument for Nav2 (default:
+  `nav2_params.yaml`), earlier in the same function. `LaunchConfiguration`
+  names aren't scoped per-include - they're shared across the whole launch
+  tree unless reset by a scoped `GroupAction` - and `DeclareLaunchArgument`
+  never overwrites an already-set value. So by the time the `ydlidar_x3`
+  branch's `IncludeLaunchDescription` reached `x3_ydlidar_launch.py`'s own
+  declare, `params_file` was already pinned to `nav2_params.yaml` (from
+  earlier in `generate_launch_description()`). The node got
+  `nav2_params.yaml` as its params file - which has no
+  `ydlidar_ros2_driver_node:` block - so every `declare_parameter(name,
+  default)` fell through to the hardcoded default baked into
+  `ydlidar_ros2_driver_node.cpp`, silently ignoring `ydlidar_x3.yaml`
+  entirely (any of its overrides, not just `port`).
+- Fix: the `ydlidar_x3` branch's `IncludeLaunchDescription` now passes
+  `launch_arguments={'params_file': .../ydlidar_ros2_driver/params/ydlidar_x3.yaml}`
+  explicitly, forcing the correct value before `x3_ydlidar_launch.py`'s own
+  declare runs. This is safe from leaking into the Nav2 groups that need
+  their own `params_file` (`nav2_params.yaml`) because `hardware_nodes` -
+  the `GroupAction` the lidar include lives in - defaults to `scoped=True`,
+  so the override doesn't escape the group.
+- Verified live on the real robot (`ssh hbot`, `hbot.local`): before the
+  fix, `./scripts/bringup.sh ...` logged
+  `[CYdLidar] Error, cannot bind to the specified serial port[/dev/ydlidar]`;
+  after hot-patching the fixed launch file onto the Pi's `install/` for
+  verification, the same command logged
+  `[YDLIDAR] Connection established in [/dev/usbttl][115200]` and started
+  scanning (firmware/model/serial printed). Along the way, briefly
+  suspected a udev mismatch (the Pi has two USB-serial adapters -
+  `/dev/ttyUSB0` is CH340 1a86:7523, unrelated to the lidar; the X3 Pro is
+  CP2102 10c4:ea60 on `/dev/ttyUSB1`, matched by the pre-existing
+  `/etc/udev/rules.d/usbttl.rules` -> `/dev/usbttl`) - that turned out to
+  be a timing artifact (X3 Pro wasn't enumerated yet when first checked),
+  not a real bug; `/etc/udev/rules.d/usbttl.rules` was untouched.
+- **Not yet deployed properly**: the fix was hot-patched directly onto the
+  Pi's `install/hbot_bringup/...` via `scp` for live verification only,
+  bypassing the normal `docker/pi` build + `sync_to_pi.sh` flow. Source is
+  fixed in this repo/submodule; still needs `docker compose build && docker
+  compose up` in `docker/pi` (now that the SDK builds into that image, see
+  the 2026-08-24 entry) followed by `./sync_to_pi.sh` for a real deploy -
+  the hot patch will just get overwritten by the same content then.
+
+---
+
+## 2026-08-25: Consolidated bringup.sh / web_bringup.sh env setup into scripts/ros_env.sh
+
+- [scripts/bringup.sh](../scripts/bringup.sh) and
+  [scripts/web_bringup.sh](../scripts/web_bringup.sh) each hand-rolled their
+  own ~15-line block setting `ROS_DOMAIN_ID`/`CONTROLLER`/`LIDAR_MODEL`,
+  `PATH`/`AMENT_PREFIX_PATH`/`CMAKE_PREFIX_PATH`, `PYTHONPATH`, and sourcing
+  ROS + the workspace `install/setup.bash`. They'd already drifted out of
+  sync in two ways: `LIDAR_MODEL` only existed in `bringup.sh` (`web_bringup.sh`
+  never exported it), and only `web_bringup.sh` actually `source`d
+  `/opt/ros/humble/setup.bash` (picking up `ROS_DISTRO`, `LD_LIBRARY_PATH`,
+  etc.) plus the `local/lib/.../dist-packages` `PYTHONPATH` entry -
+  `bringup.sh` only hand-mimicked part of that via `PATH`/`AMENT_PREFIX_PATH`.
+- The `LIDAR_MODEL` gap was a live bug, not just a hygiene issue:
+  `hbot_web.service` runs `web_bringup.sh`, and the web dashboard's "Start
+  Mapping"/"Start Navigation" buttons
+  ([web_node.py](../src/hbot_web/hbot_web/web_node.py)'s
+  `ROSLaunchManager.start_mapping_mode()`/`start_navigation_mode()`) shell
+  out to `start_mapping.sh`/`start_navigation.sh`
+  (`src/hbot_web/hbot_web/scripts/`) via a plain `subprocess.Popen(...,
+  shell=True)` with no `env=` override - so they inherit whatever
+  `hbot_web_node`'s environment was. With `LIDAR_MODEL` unset there,
+  `hbot_bringup.launch.py`'s `os.environ.get('LIDAR_MODEL', 'lds01')`
+  defaulted to `lds01` - meaning mapping/navigation launched from the web
+  UI were silently using the wrong lidar driver, even after
+  [scripts/bringup.sh](../scripts/bringup.sh) was fixed to default to
+  `ydlidar_x3`.
+- New [scripts/ros_env.sh](../scripts/ros_env.sh) is now the single source
+  of truth for that block - `bringup.sh` and `web_bringup.sh` both just
+  `source` it (merged to the more-correct `web_bringup.sh` behavior:
+  explicit `source $ros_prefix/setup.bash` + the local dist-packages
+  `PYTHONPATH` entry), then do their own thing (`ros2 launch
+  hbot_bringup hbot_bringup.launch.py "$@"` vs. `base_bringup.launch.py`
+  redirected to `log/web_bringup.log`).
+- `start_mapping.sh`/`start_navigation.sh` were deliberately left as-is,
+  not changed to also source `ros_env.sh` themselves: they're installed
+  deep inside `hbot_web`'s Python package share dir (`SCRIPTS_DIR =
+  os.path.dirname(os.path.abspath(__file__)) + '/scripts'` in
+  `web_node.py`), with no stable relative path back to the main workspace's
+  `scripts/` dir on either the dev-machine symlink-install or the Pi's
+  non-symlink `install/` - and they don't need one, since they only ever
+  run as subprocesses of `hbot_web_node`, which already inherits the fully
+  -sourced environment from whichever of the two scripts above started it.
+  Documented this reasoning directly in `ros_env.sh`'s header comment so it
+  doesn't need rediscovering later.
+- Verified with `bash -n` on all three scripts and a dry-run source of
+  `ros_env.sh` confirming `LIDAR_MODEL=ydlidar_x3`, `ROS_DISTRO=humble`,
+  and `ros2` resolving on `PATH`. **Not yet deployed to the Pi or the live
+  `hbot_web.service`** - needs `docker/pi` rebuild (though these are plain
+  scripts, not colcon packages - `sync_to_pi.sh` ships `scripts/` directly,
+  no colcon build needed for this change) + `sync_to_pi.sh`, then
+  `systemctl restart hbot_web` on the Pi to pick up the fix in the already
+  -running service.
+
+---
+
+## 2026-08-25 (follow-up): made start_mapping.sh/start_navigation.sh self-sufficient
+
+- Follow-up to the `ros_env.sh` consolidation above, after feedback that
+  relying on implicit process-tree inheritance for
+  `start_mapping.sh`/`start_navigation.sh` (`src/hbot_web/hbot_web/scripts/`)
+  wasn't good enough - it worked (verified), but silently, which is exactly
+  what caused the original `LIDAR_MODEL` bug in the first place.
+- [scripts/ros_env.sh](../scripts/ros_env.sh) now requires `$HBOT_WS`
+  (absolute workspace root) as its one input, exported by the caller before
+  sourcing - replacing the old non-exported `$workspace_dir` convention.
+  [scripts/bringup.sh](../scripts/bringup.sh) /
+  [scripts/web_bringup.sh](../scripts/web_bringup.sh) now `export HBOT_WS=...`
+  before sourcing it, so it survives into every descendant process,
+  including `hbot_web_node` and whatever it shells out to.
+- `start_mapping.sh`/`start_navigation.sh` now check `if [ -z "$LIDAR_MODEL"
+  ]` (a reliable marker that they *didn't* inherit an already-set-up
+  environment) and, only then, fall back to `source "$HBOT_WS/scripts/ros_env.sh"`
+  explicitly - erroring loudly (`${HBOT_WS:?...}`) if `$HBOT_WS` isn't
+  available either, instead of ever silently launching with a wrong
+  default again. In the normal case (run as a subprocess of `hbot_web_node`)
+  this is a no-op skip, so nothing gets re-sourced/re-appended to
+  PATH/PYTHONPATH on every mapping/navigation click.
+- Verified all four paths by hand: (1) neither `LIDAR_MODEL` nor `HBOT_WS`
+  set -> fails immediately with the explicit error, no wrong-lidar launch;
+  (2) `HBOT_WS` set, `LIDAR_MODEL` unset -> sources `ros_env.sh` and reaches
+  a correctly-configured `ros2 launch` (confirmed via
+  `~/hbot_ws/log/mapping_*.log`, hit only the same pre-existing
+  `nav2_bringup`-not-built-locally gap on this dev machine, unrelated); (3)
+  `LIDAR_MODEL` already set -> skips the fallback entirely; (4) full
+  `bringup.sh` run -> `HBOT_WS` exported and resolved correctly.
+- Deployed for real this time: synced `scripts/` to the Pi, hot-patched the
+  two installed `hbot_web` scripts (`install/hbot_web/lib/python3.10/site-packages/hbot_web/scripts/`,
+  confirmed byte-identical to source after), restarted `hbot_web.service`,
+  and ran `start_mapping.sh` reconstructing the **actual live**
+  `hbot_web_node` process's environment (via its `/proc/<pid>/environ`) to
+  get a true end-to-end test rather than a fresh, disconnected SSH shell -
+  confirmed `LiDAR successfully connected` (YDLidar X3 Pro) and
+  `cartographer_node` starting, in the real mapping log. This is now fully
+  deployed and live, not just source-fixed.
+
+---
+
+## 2026-08-25 (follow-up): src/ydlidar_x3 converted to a proper submodule + docs
+
+- `src/ydlidar_x3` had been living as a plain (non-submodule) nested git
+  repo with no remote configured. Per user request, pushed its history to a
+  new dedicated repo,
+  [`git@github.com:HbotVN/ydlidar-ros2-driver.git`](https://github.com/HbotVN/ydlidar-ros2-driver),
+  then converted it into a real submodule registered in `.gitmodules`,
+  matching every other `src/` package's convention.
+- Before pushing, committed the nested repo's outstanding working-tree
+  state (previously uncommitted): added a `.gitignore`
+  (`*/build/**`) and removed `YDLidar-SDK-master/build/` — the SDK's CMake
+  build tree — from version control (it had been accidentally committed
+  earlier); plus the pending `declare_parameter` default-value fixes and
+  the `ydlidar_x3.yaml` port change (`/dev/ydlidar` -> `/dev/usbttl`,
+  matching the workspace's existing `usbttl` udev convention) already
+  described in the two entries above.
+- Converting to a submodule required clearing `src/ydlidar_x3` first
+  (`git submodule add` refuses a non-empty, non-matching-repo path).
+  `rm -rf` failed on `YDLidar-SDK-master/build/*` with `Permission denied`
+  — those files were left root-owned by an earlier `sudo make install` /
+  `cmake` run inside the bind-mounted directory. Worked around it by
+  `mv`-ing the whole `src/ydlidar_x3` directory out of `src/` instead (a
+  rename only needs write permission on the *parent* directory, not on
+  every file inside), then `git submodule add
+  git@github.com:HbotVN/ydlidar-ros2-driver.git src/ydlidar_x3` re-cloned a
+  clean copy (no `build/` this time, since it's now `.gitignore`d at the
+  source). The orphaned root-owned copy was left at
+  `~/Documents/03.MyProjects/hbot_ws_ydlidar_x3_orphan` — **needs `sudo
+  rm -rf` to actually reclaim the disk space**, not yet done.
+- `.gitmodules` change is staged but not committed at the top level (per
+  standing instruction to leave top-level commits to the user).
+- Added [`docs/ydlidar_x3_lidar.md`](../docs/ydlidar_x3_lidar.md): a
+  consolidated setup/troubleshooting guide for this integration (SDK
+  system-wide install steps, config, launch wiring, hardware verification),
+  pulling together what had previously only existed spread across this
+  file's entries. Updated
+  [`workspace_overview.md`](workspace_overview.md#5-lidar-drivers--selectable-via-lidar_model-env-var)'s
+  lidar section to match the new `src/ydlidar_x3` submodule path/port
+  (`/dev/usbttl`) and link to the new guide — it still described the old
+  `src/lidars/ydlidar_ros2_driver-master` + `src/YDLidar-SDK-master`
+  plain-directory layout and the stale `/dev/ydlidar` default.
