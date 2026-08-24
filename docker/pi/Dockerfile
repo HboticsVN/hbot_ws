@@ -23,12 +23,30 @@ RUN apt-get update && apt-get install -y \
     ros-humble-cartographer \
     ros-humble-cartographer-ros \
     ros-humble-hls-lfcd-lds-driver \
+    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 
 # Pre-install workspace dependencies using rosdep
 WORKDIR /root/hbot_ws
 COPY src ./src
+
+# Build + install the YDLidar SDK system-wide, for arm64. It's a bare CMake
+# project (no package.xml) that ydlidar_ros2_driver's CMakeLists
+# find_package()s and links in statically (libydlidar_sdk.a) - it's not a
+# colcon package itself (src/ydlidar_x3/YDLidar-SDK-master/COLCON_IGNORE),
+# so neither rosdep below nor build_packages_pi.sh ever build or install it.
+# Doing it here, once, at image-build time (rather than in
+# build_packages_pi.sh, which reruns on every `docker compose up`) means
+# every container built from this image already has it - and because the
+# resulting driver binary links it statically, install_pi/ is self-contained
+# afterwards: sync_to_pi.sh never needs to ship the SDK to the robot itself.
+RUN cd src/ydlidar_x3/YDLidar-SDK-master && \
+    rm -rf build && mkdir build && cd build && \
+    cmake .. && \
+    make -j"$(nproc)" && \
+    make install
+
 RUN rm -rf src/hbot_simulation && \
     apt-get update && \
     rosdep update && \
