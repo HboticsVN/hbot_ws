@@ -22,3 +22,6 @@
 [submodule "src/robot_localization"]
 	path = src/robot_localization
 	url = https://github.com/cra-ros-pkg/robot_localization.git
+[submodule "src/ydlidar_x3"]
+	path = src/ydlidar_x3
+	url = git@github.com:HbotVN/ydlidar-ros2-driver.git
