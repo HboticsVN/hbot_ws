@@ -57,7 +57,8 @@ Under the `src/` directory, the following ROS 2 packages are configured as submo
 ### 4. [hbot_simulation](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_simulation)
 * **Role**: Simulation environment.
 * **Key Files**:
-  * [hbot_house.launch.py](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_simulation/launch/hbot_house.launch.py): Launches Gazebo, loads a virtual indoor environment (`hbot_house.world`), and spawns the robot description.
+  * [hbot_house.launch.py](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_simulation/launch/hbot_house.launch.py): Launches Gazebo, loads a virtual indoor environment (`hbot_house.world`), runs `robot_state_publisher`, and spawns the robot **from the `/robot_description` topic** (not a pre-baked `.sdf`) so the simulated body and the TF tree share one source of truth. Accepts a `headless` arg (gzserver only, no GUI). The simulated robot's frame tree and diff-drive geometry are kept in lock-step with the real robot — see [walkthrough.md](walkthrough.md#2026-08-27-simulation-parity--model-matches-the-real-urdf-mapping--nav2-run-headless).
+* **Docs**: [docs/simulation_guide.md](../docs/simulation_guide.md) (reference: architecture, all `bringup.sh` args, troubleshooting) and [docs/sim_mapping_localization_guide.md](../docs/sim_mapping_localization_guide.md) (course: step-by-step mapping + localization lessons). Headless smoke scripts: `scripts/dev_sim_*.sh`.
 
 ### 5. Lidar drivers — selectable via `LIDAR_MODEL` env var
 [hbot_bringup.launch.py](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_bringup/launch/hbot_bringup.launch.py)'s
@@ -111,14 +112,26 @@ attached to the robot doesn't change between launches of the same machine.
 From [hbot.urdf.xacro](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_description/urdf/hbot.urdf.xacro) and [yahboom_driver_params.yaml](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_bringup/config/yahboom_driver_params.yaml):
 
 * **Type**: Differential Drive Robot
-* **Dimensions**: Length: `0.17m`, Width: `0.14m`, Height: `0.12m`.
+* **Dimensions**: Length: `0.17m`, Width: `0.14m`, Height: `~0.12m` (sim
+  collision box uses `0.11m` so its top clears the lidar scan plane).
+* **Frame tree** (identical in sim and on hardware — the sim xacro mirrors
+  [`hbot_bringup/config/hbot.urdf`](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_bringup/config/hbot.urdf),
+  the URDF the Pi actually loads): `base_footprint` == `base_link` (identity
+  joint); `laser` at `xyz="0.08 0 0.14" rpy="0 0 0"`; `imu_link` at the base
+  origin.
 * **Wheels**:
   * **Diameter**: `0.065m` (radius `0.0325m`).
-  * **Track Width / Separation**: `0.17m` (defined as `base_width + 2 * wheel_ygap`).
+  * **Track Width / Separation**: `0.20m` — matches the driver's `wheel_track`
+    in `yahboom_driver_params.yaml` (the xacro previously computed `0.17m`
+    from `base_width + 2 * wheel_ygap` and had drifted).
   * **Encoder Resolution**: `11` PPR, Gear Ratio: `56:1`. Total encoder ticks per rotation = `11 * 56 * 4 = 2464` ticks.
 * **Lidar Sensor**:
-  * **Mounting**: Mounted `0.075m` above the base center.
-  * **Orientation**: Flipped 180 degrees (`rpy="0 0 3.14"`).
+  * **Mounting**: `0.08m` forward of and `0.14m` above the base origin
+    (`base_link`/`base_footprint`), **no yaw** (`rpy="0 0 0"`). Matches the
+    real robot's URDF; the old sim value (`0 0 0.075`, yaw `π`) has been
+    dropped. In sim, Gazebo's ray sensor models the YDLidar X3
+    (`0.12–12 m`, `10 Hz`, 360°); see
+    [walkthrough.md](walkthrough.md#2026-08-27-simulation-parity--model-matches-the-real-urdf-mapping--nav2-run-headless).
 
 ---
 
@@ -150,3 +163,22 @@ Wraps the `ros2 launch hbot_bringup hbot_bringup.launch.py` command. Environment
   SLAM/Map    Nav2 Map-based    SLAM/Map    Nav2 Map-based
   Building    Localization      Building    Localization
 ```
+
+Both `slam:=True` branches run **Cartographer** (`carto_mapping.lua`,
+tracking `base_footprint`, publishing `map -> odom`), not slam_toolbox — the
+slam_toolbox include in `hbot_bringup.launch.py` is commented out.
+
+`simulation_mode` differences beyond Gazebo-vs-hardware:
+
+* **Headless**: `headless:=True` forwards to `hbot_house.launch.py` to run
+  gzserver without the GUI (default `False`).
+* **Odometry**: Gazebo's diff-drive plugin publishes `odom -> base_footprint`
+  and `/odom` directly. On hardware the driver + `robot_localization` EKF
+  (in `base_bringup.launch.py`) do this; the EKF is **not** run in sim.
+* **`cmd_vel`**: on hardware Nav2's smoothed output is remapped to
+  `cmd_vel_nav_smoothed` and a `twist_mux` (in `base_bringup.launch.py`)
+  arbitrates teleop vs. Nav2 onto the final `cmd_vel`. Sim has no
+  `base_bringup`/`twist_mux`, so `hbot_bringup.launch.py`'s `_sim` branch
+  skips that remap and Nav2's `velocity_smoother` publishes `cmd_vel`
+  straight to the Gazebo diff-drive plugin. See
+  [walkthrough.md](walkthrough.md#2026-08-27-simulation-parity--model-matches-the-real-urdf-mapping--nav2-run-headless).
