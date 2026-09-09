@@ -678,3 +678,167 @@ by side.
   (`/dev/usbttl`) and link to the new guide — it still described the old
   `src/lidars/ydlidar_ros2_driver-master` + `src/YDLidar-SDK-master`
   plain-directory layout and the stale `/dev/ydlidar` default.
+
+---
+
+## 2026-08-27: Simulation parity — model matches the real URDF, mapping + Nav2 run headless
+
+Goal: make `simulation_mode:=True` run Cartographer mapping and Nav2 the same
+way the real robot does, and bring the simulated robot model in line with the
+URDF `robot_state_publisher` actually loads on the Pi
+([`src/hbot_bringup/config/hbot.urdf`](../src/hbot_bringup/config/hbot.urdf)).
+Done on branch `sim/mapping-nav-parity` (worktree beside the repo).
+
+### [`hbot_description/urdf/hbot.urdf.xacro`](../src/hbot_description/urdf/hbot.urdf.xacro)
+
+- **Frame tree now matches the real robot.** `base_footprint -> base_link` is
+  identity (was a `0.0825 m` Z offset); `base_link -> laser` is
+  `xyz="0.08 0 0.14" rpy="0 0 0"` (was `xyz="0 0 0.075"`, yaw `π`); added
+  `imu_link` at the base origin. These are exactly the joints in
+  `config/hbot.urdf`, so `/tf` is identical in sim and on hardware.
+- **`wheel_separation` 0.17 -> 0.20** to match the driver's `wheel_track`
+  ([`yahboom_driver_params.yaml`](../src/hbot_bringup/config/yahboom_driver_params.yaml));
+  `wheel_diameter` stays `0.065`. Wheel joints re-derived from
+  `wheel_separation` / `wheel_radius` instead of the old
+  `base_width + wheel_ygap` / `wheel_zoff` scheme, with the base_link frame
+  kept at ground level (matching real) and only the visual/collision box
+  lifted.
+- **Body box height 0.12 -> 0.11 and lifted to z ∈ [0.02, 0.13].**
+  With the lidar at the real `0.14 m` height, a full-height box top poked
+  *through* the horizontal scan plane, so the simulated lidar returned
+  ~0.16 m hits off the robot's own collision box on every rear/side ray —
+  Nav2 saw a phantom obstacle ring and refused to move. Box top now clears
+  the scan plane. (On the real robot the lidar puck sits proud of the shell
+  and never sees it.)
+- Lidar sensor block aligned to the YDLidar X3 (`0.12–12 m`, `10 Hz`,
+  full 360°); added a Gazebo IMU sensor on `imu_link` publishing `/imu`
+  (only consumed if someone wires the EKF into sim; Gazebo still publishes
+  `odom->base_footprint` directly by default).
+- `CMakeLists.txt`'s `gz sdf -p` step now produces a non-empty
+  [`hbot.sdf`](../src/hbot_description/urdf/hbot.sdf) (the committed one was
+  a 0-byte file — a previous generator run had failed silently).
+
+### [`hbot_simulation/launch/hbot_house.launch.py`](../src/hbot_simulation/launch/hbot_house.launch.py)
+
+- **Spawn from the `/robot_description` topic**, not the (empty) `hbot.sdf`
+  file — single source of truth, and the sim body can't drift from the TF
+  tree. `spawn_entity.py` waits for the latched topic from
+  `robot_state_publisher`.
+- Declared `use_sim_time` / `x_pose` / `y_pose` / `headless` as real launch
+  args; set `GAZEBO_MODEL_PATH` to the package `models/` dir.
+
+### [`hbot_bringup/launch/hbot_bringup.launch.py`](../src/hbot_bringup/launch/hbot_bringup.launch.py)
+
+- **New `headless` arg** (default `False`), forwarded to
+  `hbot_house.launch.py`, so mapping/navigation can run without the Gazebo
+  GUI (CI / remote / this validation).
+- **The physical lidar driver include is wrapped in `try/except
+  PackageNotFoundError`.** It only ever runs inside `hardware_nodes`
+  (`UnlessCondition(simulation_mode)`), but `get_package_share_directory()`
+  was evaluated while the launch description was *built*, so a sim-only host
+  without `hls_lfcd_lds_driver` / `ydlidar_ros2_driver` installed couldn't
+  start the sim at all. Now it degrades to "no lidar node" (Gazebo
+  publishes `/scan` itself in sim).
+- **`cmd_vel` routing for Nav2 now works in sim.** The
+  `SetRemap(cmd_vel_smoothed -> cmd_vel_nav_smoothed)` around the vendored
+  `navigation_launch.py` only makes sense on hardware, where
+  `base_bringup.launch.py`'s `twist_mux` routes `cmd_vel_nav_smoothed` back
+  to `cmd_vel`. There is no `twist_mux` in sim (and it isn't even
+  guaranteed installed), so Nav2's smoothed output went nowhere and the
+  robot never moved under autonomous control. Split `bringup_cmd_group` into
+  a `_real` branch (with the SetRemap, gated
+  `enable_navigation and not simulation_mode`) and a `_sim` branch (no
+  SetRemap → Nav2's `velocity_smoother` publishes `cmd_vel` directly, which
+  the Gazebo diff-drive plugin subscribes to).
+- **`slam:=False` localization mode now has a working default map.** The
+  `map` arg used to default to a non-existent `hbot_bringup/maps/map.yaml`,
+  so localization mode couldn't start without an explicit `map:=`. Added
+  [`maps/hbot_house_sim.{pgm,yaml}`](../src/hbot_bringup/maps/) (built from
+  `hbot_house.world` with `scripts/dev_sim_build_map.sh`), installed via a
+  `maps/*` glob in [`setup.py`](../src/hbot_bringup/setup.py), and pointed
+  the `map` default at it. Real-hardware users still pass `map:=/abs/path`.
+
+### Sample map + helper scripts
+
+- [`scripts/dev_sim_build_map.sh`](../scripts/dev_sim_build_map.sh) - brings
+  up sim+Cartographer headless, drives a patrol pattern, saves the map with
+  `nav2_map_server map_saver_cli`.
+- [`scripts/dev_sim_localization_smoke.sh`](../scripts/dev_sim_localization_smoke.sh)
+  - sim + AMCL + Nav2 against the saved map; sets `/initialpose`, checks
+  AMCL convergence, drives a goal.
+
+### Validation (headless, on the dev laptop)
+
+Full `navigation2` fork + `slam_toolbox` built from source (`robot_localization`
+skipped locally — needs `geographic_msgs`, not on this host; EKF is
+hardware-only). Helper scripts: `scripts/dev_sim_smoke.sh`,
+`scripts/dev_sim_mapping_smoke.sh`, `scripts/dev_sim_nav_smoke.sh`.
+
+- **Gazebo bring-up**: robot spawns from `/robot_description`; `/scan`
+  (10 Hz, 360°, no self-hits), `/odom` (~30 Hz), `/imu` (200 Hz) all
+  publishing; TF chain `odom → base_footprint → base_link →
+  laser(0.08,0,0.14) → imu_link` exactly as on hardware; `/cmd_vel` moves
+  the robot.
+- **Mapping** (`slam:=True enable_navigation:=False`): `cartographer_node` +
+  occupancy grid come up, `/map` published, `map → odom` transform
+  broadcast, submaps accumulate while driving.
+- **Navigation** (`slam:=True enable_navigation:=True`): all Nav2 lifecycle
+  nodes reach `active`; a `NavigateToPose` goal to `(1.2, 0.0)` returns
+  **`SUCCEEDED`** with the robot ending at `(0.96, 0.0)` (inside
+  `xy_goal_tolerance`).
+- **Localization** (`slam:=False enable_navigation:=True`, default map):
+  `map_server` + `amcl` + Nav2 come up; after an `/initialpose` at
+  `(0,0,0)` AMCL converges (`/amcl_pose` ≈ origin, `map -> odom` broadcast);
+  a `NavigateToPose` goal returns **`SUCCEEDED`**.
+
+**Not done**: `robot_localization`/EKF not exercised in sim (Gazebo publishes
+`odom` directly).
+
+---
+
+## 2026-08-29: Simulation re-verification + course/guide docs
+
+Picked the `sim/mapping-nav-parity` worktree back up. Rebuilt
+`hbot_description` / `hbot_simulation` / `hbot_bringup` and re-ran all four
+headless smoke scripts on the dev laptop to confirm the 2026-08-27 work still
+holds after the xacro regeneration:
+
+- `scripts/dev_sim_smoke.sh` — spawn from `/robot_description`; `/scan`
+  9.98 Hz (`angle_min ≈ -π`, `range_min 0.12`, `range_max 12.0`), `/odom`
+  ~29 Hz, `/imu` ~199 Hz; TF `odom→base_footprint→base_link→laser
+  [0.08,0,0.14]` / `→imu_link [0,0,0]` all identity/exact; `cmd_vel` moves
+  the robot.
+- `scripts/dev_sim_mapping_smoke.sh` — `cartographer_node` up, `/map` +
+  `map→odom` broadcast, submaps + loop-closure constraints accumulating, no
+  errors/warnings in the launch log.
+- `scripts/dev_sim_nav_smoke.sh 40 1.2 0.0` — all Nav2 lifecycle nodes
+  `active`; `NavigateToPose (1.2, 0)` → **`SUCCEEDED`**, robot ended at
+  `map→base_link (0.96, 0.0)`.
+- `scripts/dev_sim_localization_smoke.sh "" 60 0.8 0.0` — AMCL converges
+  after `/initialpose (0,0,0)` (`/amcl_pose ≈ origin`, `map→odom`
+  broadcast); `NavigateToPose (0.8, 0)` → **`SUCCEEDED`**.
+  - **Observed once** with a 40 s warmup on a loaded laptop:
+    `lifecycle_manager_navigation` aborted Nav2 bring-up
+    (`controller_server ... get_state ... async_send_request failed`) — a
+    startup race, not a regression. 60 s warmup (or `headless:=True` + no
+    RViz, or staging Nav2 after Gazebo settles) clears it. Documented in
+    both guides' troubleshooting tables.
+
+### Docs
+
+- [`docs/simulation_guide.md`](../docs/simulation_guide.md) — the reference
+  guide from 2026-08-27. Added a "test status" note, the
+  `lifecycle_manager ... Aborting bringup` troubleshooting row, and clearer
+  wording on the default-map initial pose.
+- [`docs/sim_mapping_localization_guide.md`](../docs/sim_mapping_localization_guide.md)
+  — **course document** (step-by-step lessons: Bài 1 mapping, Bài 2
+  localization+nav, Bài 3 headless smoke scripts). Rewritten from the older
+  draft that still carried the stale "goal accepted but robot doesn't move"
+  limitation + `topic_tools relay` workaround — both gone now that the sim
+  `cmd_vel` routing is fixed. Adds the bundled `hbot_house_sim` default map,
+  `headless`, and a sim↔real parity/differences table. Cross-links the
+  reference guide. (An untracked older copy of this filename still sits in
+  the primary `hbot_ws` checkout on `main` — superseded by this one.)
+- [`CLAUDE.md`](../CLAUDE.md) — "Robot kinematics" paragraph refreshed:
+  track width 0.17→0.20 m, `base_footprint ≡ base_link`, laser at
+  `(0.08, 0, 0.14)` no yaw, `imu_link`, sim collision box 0.11 m.

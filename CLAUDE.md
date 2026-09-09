@@ -75,7 +75,7 @@ Requires `install_pi/` to already exist (build it with `docker/pi` first). After
 
 ### Robot kinematics (from `hbot_description` + `yahboom_driver_params.yaml`)
 
-Differential drive; body 0.17×0.14×0.12 m; wheel diameter 0.065 m, track width 0.17 m; encoders 11 PPR × 56:1 gear ratio × 4 = 2464 ticks/rev; LiDAR mounted 0.075 m above base center, yawed 180° (`rpy="0 0 3.14"`).
+Differential drive; body ≈0.17×0.14×0.12 m (sim collision box 0.11 m tall so it clears the scan plane); wheel diameter 0.065 m, track width 0.20 m (`wheel_track` in `yahboom_driver_params.yaml`; the sim xacro matches); encoders 11 PPR × 56:1 gear ratio × 4 = 2464 ticks/rev. Frame tree (sim mirrors `hbot_bringup/config/hbot.urdf`, the URDF the Pi loads): `base_footprint` ≡ `base_link`; `laser` at `xyz="0.08 0 0.14" rpy="0 0 0"`; `imu_link` at the base origin. Sim/real parity + validation: `docs/simulation_guide.md`, `agent/walkthrough.md` (2026-08-27 / 2026-08-29 entries).
 
 ### Networking
 
