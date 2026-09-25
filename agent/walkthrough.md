@@ -919,3 +919,33 @@ has no effect; `<include>` suggested), and the sim map (`dev_sim_build_map.sh` �
 `hbot_bringup/maps/hbot_house_sim.*`). Notes the stale
 `hbot_simulation/launch/hbot_description.launch.py` and the missing `gazebo_ros`/`hbot_description`
 deps in `hbot_simulation/package.xml`.
+
+### 2026-09-25/26: Standard robot description (one xacro + geometry YAML)
+
+Branches `feat/standard-description` in `hbot_description`, `hbot_bringup` and
+this repo; `feat/cad-model` in `hbot_simulation`. Full guide:
+[`hbot_description/docs/robot_description.md`](../src/hbot_description/docs/robot_description.md).
+
+- [`hbot_description/config/hbot_geometry.yaml`](../src/hbot_description/config/hbot_geometry.yaml):
+  every dimension (`cad` = take `cad_params.xacro`); track 0.190 m, measured wheel
+  radius 0.03375 / width 0.0265, lidar sensor spec.
+- [`urdf/hbot.urdf.xacro`](../src/hbot_description/urdf/hbot.urdf.xacro): single entry,
+  args `use_sim` (adds `hbot.gazebo.xacro`) and `driver_joint_states`; model in
+  `hbot_base.xacro` + `hbot_sensors.xacro` (`hbot_body.xacro` removed). The real
+  robot now gets the full model; wheels are `fixed` until the driver publishes
+  `/joint_states`. `base_link` is blue (Gazebo/Blue + RViz `blue`).
+- `CMakeLists.txt`: `hbot.urdf` / `hbot_sim.urdf` / `hbot_sim.sdf` generated into
+  `build/` and installed; nothing written to `src/`, no longer tracked
+  (`cmake/generate_urdf.cmake` removed).
+- New `launch/description.launch.py` (robot_state_publisher, xacro at launch) and
+  `launch/view.launch.py`; `hbot_description.launch.py` kept as a wrapper.
+- `test/test_description.py` (colcon test): real/sim frame parity, wheels vs.
+  diff-drive and driver params, lidar spec, scan-plane clearance, meshes.
+- [`hbot_bringup/launch/hbot_bringup.launch.py`](../src/hbot_bringup/launch/hbot_bringup.launch.py):
+  real mode includes `description.launch.py`; [`yahboom_driver_params.yaml`](../src/hbot_bringup/config/yahboom_driver_params.yaml)
+  `wheel_track` 0.2 → 0.19, `wheel_diameter` 0.065 → 0.0675.
+- Verified: 9/9 tests; real-mode launch on domain 42 (nav2_bringup stubbed on the
+  laptop): `laser (0.043, 0, 0.137)`, wheels y ±0.095. Not yet run: Gazebo, Pi.
+- Pi needs `ros-humble-xacro` at run time (rosdep). Still stale: `CLAUDE.md`
+  kinematics paragraph (track 0.20, laser 0.08/0.14, `config/hbot.urdf`) and
+  `hbot_simulation/docs/simulation_sources.md` Part 1 (old `sim:=` flow).
