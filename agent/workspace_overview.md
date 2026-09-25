@@ -44,7 +44,8 @@ Under the `src/` directory, the following ROS 2 packages are configured as submo
 ### 2. [hbot_description](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_description)
 * **Role**: Defines the mechanical and physical properties of the robot.
 * **Key Files**:
-  * [hbot.urdf.xacro](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_description/urdf/hbot.urdf.xacro): The primary parameterised Xacro file.
+  * [hbot.urdf.xacro](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_description/urdf/hbot.urdf.xacro): The primary parameterised Xacro file. On branch `feat/cad-model` it is the single source for two generated descriptions (via `cmake/generate_urdf.cmake`): `urdf/hbot.urdf` (real robot, TF frames only: `base_footprint`, `base_link`, `laser`, `imu_link`; loaded by `hbot_bringup`) and `urdf/hbot_sim.urdf` (`sim:=true`: + CAD meshes, collisions, wheels, caster from `hbot_body.xacro` and Gazebo plugins from `hbot.gazebo.xacro`; loaded by `hbot_simulation`). Measured dimensions come from the generated `urdf/cad_params.xacro`.
+  * `models/*.stl` → [scripts/prepare_meshes.py](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_description/scripts/prepare_meshes.py) → `meshes/*.stl` + `urdf/cad_params.xacro` (feat/cad-model; guide: [docs/cad_model.md](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_description/docs/cad_model.md)).
   * `CMakeLists.txt`: Instructs the build process to automatically compile the Xacro into `hbot.urdf` and export the Gazebo-compatible `hbot.sdf`.
 
 ### 3. [hbot_driver](file:///home/huy/Documents/03.MyProjects/hbot_ws/src/hbot_driver)

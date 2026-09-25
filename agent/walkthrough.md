@@ -842,3 +842,80 @@ holds after the xacro regeneration:
 - [`CLAUDE.md`](../CLAUDE.md) — "Robot kinematics" paragraph refreshed:
   track width 0.17→0.20 m, `base_footprint ≡ base_link`, laser at
   `(0.08, 0, 0.14)` no yaw, `imu_link`, sim collision box 0.11 m.
+
+## 2026-09-23: hbot_description built from CAD meshes (branch `feat/cad-model`)
+
+Submodule `src/hbot_description`, new branch `feat/cad-model` off `main` @ `c6ccb37`
+(not committed yet). Step-by-step guide:
+[`src/hbot_description/docs/cad_model.md`](../src/hbot_description/docs/cad_model.md).
+
+- Raw CAD exports [`models/base_link.stl`, `models/wheel.stl`](../src/hbot_description/models)
+  are in mm, yawed 37.4° and off-origin, with the caster ball and a YDLidar X2/X3
+  housing baked into the chassis.
+- New [`scripts/prepare_meshes.py`](../src/hbot_description/scripts/prepare_meshes.py)
+  (numpy only) detects the yaw from the wheel axle, re-expresses everything in the
+  body frame (origin on the ground under the axle mid-point, x toward the caster),
+  splits the lidar out, and writes `meshes/{base_link,wheel,lidar}.stl` (link
+  frames, metres) plus generated `urdf/cad_params.xacro` (measured dimensions).
+- [`urdf/hbot.urdf.xacro`](../src/hbot_description/urdf/hbot.urdf.xacro) rewritten
+  with mesh visuals + primitive collisions; `wheel_separation` 0.195 (user spec
+  190–200 mm; CAD 0.183). Gazebo blocks moved to
+  [`urdf/hbot.gazebo.xacro`](../src/hbot_description/urdf/hbot.gazebo.xacro); lidar
+  sim now YDLidar X3: 8 Hz, 375 samples, 0.12–8 m.
+- `CMakeLists.txt` installs `meshes/`; `package.xml` exports `gazebo_model_path`;
+  `launch/hbot_description.launch.py` runs `joint_state_publisher` (arg).
+- New geometry: `laser` (0.0425, 0, 0.1368), caster r 0.0116 at (0.105, 0.010),
+  wheel Ø 0.0674, chassis box x −0.050…0.132, y ±0.090, top 0.117 < scan plane.
+- Verified: `check_urdf` + `gz sdf -p` OK; headless Gazebo (domain 42) `/scan`
+  8 Hz / 375 samples / no self-hits, TF as above, drives + spins. The idle ~1 mm/s
+  Gazebo creep also exists with the old model (pre-existing).
+- Not yet synced (in `hbot_bringup`): Pi `config/hbot.urdf` laser pose (0.08, 0.14),
+  driver `wheel_track` 0.20 / `wheel_diameter` 0.065, Nav2 footprint (centred
+  ±0.09 × ±0.12, but the robot now extends −0.05…+0.132 in x).
+- `build/hbot_simulation` is root-owned (Docker leftover) → the host build fails with
+  Permission denied; verification used a throwaway overlay under `log/cadcheck/`.
+
+### 2026-09-23 (follow-up): `hbot.urdf` (real, frames only) + `hbot_sim.urdf` (Gazebo) from one xacro
+
+Guide: Step 7 of [`src/hbot_description/docs/cad_model.md`](../src/hbot_description/docs/cad_model.md).
+Branches `feat/cad-model` in `hbot_description`, `hbot_simulation`, `hbot_bringup` (uncommitted).
+
+- [`urdf/hbot.urdf.xacro`](../src/hbot_description/urdf/hbot.urdf.xacro) takes `sim`
+  (default `false`). The shared frames (`base_footprint`, `base_link`, `laser`,
+  `imu_link`) are declared once. `sim:=true` fills `base_link`/`laser` with
+  visuals/collisions/inertias and adds the wheels, caster and Gazebo plugins from the new
+  [`urdf/hbot_body.xacro`](../src/hbot_description/urdf/hbot_body.xacro) +
+  `hbot.gazebo.xacro`. The real robot gets no wheel joints (the driver publishes no
+  `/joint_states`).
+- New [`cmake/generate_urdf.cmake`](../src/hbot_description/cmake/generate_urdf.cmake)
+  (install-time) writes `urdf/hbot.urdf` + `urdf/hbot_sim.urdf`, fails the build on a
+  xacro error, and writes `hbot_sim.sdf` only if `gz` exists (Pi image has none).
+  `urdf/hbot.sdf` removed.
+- `launch/hbot_description.launch.py`: `sim` arg; `robot_description` wrapped in
+  `ParameterValue(value_type=str)` (Humble YAML-parses the xacro output otherwise).
+  The `joint_state_publisher` node added earlier was removed by the user; kept out.
+- [`hbot_simulation/launch/hbot_house.launch.py`](../src/hbot_simulation/launch/hbot_house.launch.py)
+  → `hbot_sim.urdf`.
+- [`hbot_bringup/launch/hbot_bringup.launch.py`](../src/hbot_bringup/launch/hbot_bringup.launch.py)
+  → `hbot_description/urdf/hbot.urdf`; `config/hbot.urdf` deleted (+ `setup.py`),
+  `package.xml` exec_depends `hbot_description`. **The real laser pose changes**
+  from (0.08, 0, 0.14) to the CAD's (0.0425, 0, 0.1368); re-check SLAM on hardware.
+- Verified: `check_urdf` for both; `robot_state_publisher` `sim:=false|true` →
+  `base_footprint→laser (0.043, 0, 0.137)`; headless Gazebo from `hbot_sim.urdf`
+  (overlay `log/cadcheck/`, domain 42): `/scan` 8 Hz, wheel TF, drives.
+- On merge: update [`CLAUDE.md`](../CLAUDE.md) (kinematics paragraph still cites
+  `hbot_bringup/config/hbot.urdf`, laser 0.08/0.14, `hbot.sdf`) and
+  `docs/simulation_guide.md` / `docs/sim_mapping_localization_guide.md`, which
+  reference `config/hbot.urdf`.
+
+### 2026-09-24: Simulation sources guide
+
+New [`src/hbot_simulation/docs/simulation_sources.md`](../src/hbot_simulation/docs/simulation_sources.md)
+(branch `feat/cad-model`): the three sim sources and how each is generated:
+robot (`hbot_description` xacro → `hbot_sim.urdf` via `prepare_meshes.py` + colcon),
+world (`worlds/hbot_house.world`, Gazebo GUI; the `hbot_house` model is copied
+**inline**, geometry identical to `models/hbot_house/model.sdf`, so editing the model alone
+has no effect; `<include>` suggested), and the sim map (`dev_sim_build_map.sh` →
+`hbot_bringup/maps/hbot_house_sim.*`). Notes the stale
+`hbot_simulation/launch/hbot_description.launch.py` and the missing `gazebo_ros`/`hbot_description`
+deps in `hbot_simulation/package.xml`.
