@@ -5,8 +5,7 @@
 # independently, and had already drifted: LIDAR_MODEL only existed in
 # bringup.sh, so mapping/navigation launched from the web dashboard (which
 # runs as a subprocess of hbot_web_node, itself started by web_bringup.sh)
-# silently defaulted to the wrong lidar driver. See agent/walkthrough.md,
-# 2026-08-25 entry.
+# silently defaulted to the wrong lidar driver. See docs/ydlidar_x3_lidar.md.
 #
 # start_mapping.sh / start_navigation.sh (src/hbot_web/hbot_web/scripts/)
 # also source this - they only ever run as subprocesses of hbot_web_node,

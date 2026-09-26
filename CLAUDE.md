@@ -39,7 +39,7 @@ Both scripts force the system Python (`/usr/bin/python3`) instead of any active 
 
 `scripts/web_bringup.sh` launches `hbot_bringup base_bringup.launch.py` (driver + web dashboard) and logs to `log/web_bringup.log`; this is what `hbot_web.service` (systemd unit) runs on the Pi.
 
-Baseline acceptance for any bringup change (see `PHASE0_RUNBOOK.md`): `robot_state_publisher`, lidar, Nav2, and SLAM/localization all start without crashing; `/tf`, `/odom`, `/scan`, `/cmd_vel` carry data appropriate to the mode; the robot can traverse 5 consecutive waypoints in sim; on real hardware, odometry doesn't drift abnormally over a short teleop run.
+Baseline acceptance for any bringup change (see `docs/phase0_runbook.md`): `robot_state_publisher`, lidar, Nav2, and SLAM/localization all start without crashing; `/tf`, `/odom`, `/scan`, `/cmd_vel` carry data appropriate to the mode; the robot can traverse 5 consecutive waypoints in sim; on real hardware, odometry doesn't drift abnormally over a short teleop run.
 
 ## Docker Workflows
 
@@ -62,7 +62,7 @@ Requires `install_pi/` to already exist (build it with `docker/pi` first). After
 - **hbot_bringup** — central orchestration package. `hbot_bringup.launch.py` is the main entry point handling sim-vs-real, mapping vs. localization, and navigation args; `base_bringup.launch.py` launches just the driver + web dashboard (used on the Pi in production). `config/` holds `nav2_params.yaml`, `slam_params.yaml`, `yahboom_driver_params.yaml`.
 - **hbot_description** — robot URDF/Xacro (`hbot.urdf.xacro`); `CMakeLists.txt` compiles it to `hbot.urdf` and exports a Gazebo-compatible `hbot.sdf`.
 - **hbot_driver** — hardware interface. Subscribes to `/cmd_vel`, drives the Yahboom Rosmaster board over serial (via the bundled `Rosmaster_Lib`), publishes odometry, battery, and optional IMU data. Currently mid-port from Python to C++ (see recent commits / `feat/cpp_driver` branch).
-- **hbot_simulation** — Gazebo world + spawn launch (`hbot_house.launch.py`, `hbot_house.world`). Excluded from Pi builds.
+- **hbot_simulation** — Gazebo Sim (gz sim, Fortress via `ros-humble-ros-gz`; Gazebo Classic is no longer used) world + spawn launch (`hbot_house.launch.py`, `hbot_house.world`) + `config/gz_bridge.yaml` (ros_gz_bridge topic map). Excluded from Pi builds. See `src/hbot_simulation/README.md`.
 - **lds_006_driver** — LDS-006 LiDAR serial driver node, publishes `sensor_msgs/LaserScan` on `/scan`.
 - **navigation2**, **slam_toolbox**, **robot_localization** — forked/customized versions of the standard Nav2, SLAM Toolbox, and EKF localization stacks (see `.gitmodules` for the specific forks/branches in use).
 - **hbot_web** (not a submodule, lives directly in this repo) — Flask-SocketIO dashboard (`web_node.py`): publishes `/cmd_vel` for teleop, subscribes to odometry/battery/scan/map topics, serves a joystick + telemetry + map UI, manages saved maps in a local SQLite DB (`hbot_maps.db`), and shells out to `nmcli` for WiFi AP/STA management. Frontend is `templates/index.html` + `static/js/main.js` + `static/css/style.css` (canvas joystick, Socket.IO bindings, WiFi modals).
@@ -75,7 +75,7 @@ Requires `install_pi/` to already exist (build it with `docker/pi` first). After
 
 ### Robot kinematics (from `hbot_description` + `yahboom_driver_params.yaml`)
 
-Differential drive; body ≈0.17×0.14×0.12 m (sim collision box 0.11 m tall so it clears the scan plane); wheel diameter 0.065 m, track width 0.20 m (`wheel_track` in `yahboom_driver_params.yaml`; the sim xacro matches); encoders 11 PPR × 56:1 gear ratio × 4 = 2464 ticks/rev. Frame tree (sim mirrors `hbot_bringup/config/hbot.urdf`, the URDF the Pi loads): `base_footprint` ≡ `base_link`; `laser` at `xyz="0.08 0 0.14" rpy="0 0 0"`; `imu_link` at the base origin. Sim/real parity + validation: `docs/simulation_guide.md`, `agent/walkthrough.md` (2026-08-27 / 2026-08-29 entries).
+Differential drive; body ≈0.17×0.14×0.12 m (sim collision box 0.11 m tall so it clears the scan plane); wheel diameter 0.065 m, track width 0.20 m (`wheel_track` in `yahboom_driver_params.yaml`; the sim xacro matches); encoders 11 PPR × 56:1 gear ratio × 4 = 2464 ticks/rev. Frame tree (sim mirrors `hbot_bringup/config/hbot.urdf`, the URDF the Pi loads): `base_footprint` ≡ `base_link`; `laser` at `xyz="0.08 0 0.14" rpy="0 0 0"`; `imu_link` at the base origin. Sim/real parity + validation: `docs/simulation_guide.md`.
 
 ### Networking
 
@@ -83,4 +83,4 @@ ROS 2 DDS communication defaults to `ROS_DOMAIN_ID=9` and `CONTROLLER=yahboom` e
 
 ## Agent Workflow Convention
 
-This workspace maintains an `agent/` folder with planning artifacts for AI coding assistants: `agent/workspace_overview.md` (architecture breakdown) and `agent/walkthrough.md` (running log of implemented changes). When making a non-trivial implementation change, update/append to `agent/walkthrough.md` and keep `agent/workspace_overview.md` in sync, using relative markdown links to touched files.
+Documentation layout: workspace-level docs live only in `docs/`; each HBOT submodule documents itself in its own `README.md` (no `docs/` folder inside submodules). The `agent/` folder (`agent/workspace_overview.md`, `agent/walkthrough.md`) is a local, git-ignored scratchpad for AI coding assistants: when making a non-trivial change, append to `agent/walkthrough.md` and keep `agent/workspace_overview.md` in sync, but never commit it or link to it from tracked files. Commit messages must not include `Co-Authored-By` trailers.

@@ -206,4 +206,3 @@ ros2 topic echo /scan --once
 - [`src/ydlidar_x3`](../src/ydlidar_x3) — the submodule itself.
 - [`src/hbot_bringup/launch/hbot_bringup.launch.py`](../src/hbot_bringup/launch/hbot_bringup.launch.py) — `LIDAR_MODEL` selection.
 - [`scripts/ros_env.sh`](../scripts/ros_env.sh) — exports `LIDAR_MODEL` for every entry point.
-- [`agent/walkthrough.md`](../agent/walkthrough.md) — full change history/debugging log for this integration.
