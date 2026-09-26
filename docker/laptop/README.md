@@ -20,7 +20,7 @@ xhost +local:root
 
 ## 🏗️ Step 2: Build the Container
 
-Navigate to this directory and build the Docker image. This will download the base ROS image and install all workspace dependencies (like Ceres solver, Navigation2, and Gazebo plugins) using `rosdep`.
+Navigate to this directory and build the Docker image. This will download the base ROS image and install all workspace dependencies (like Ceres solver, Navigation2, and Gazebo Sim Fortress via `ros-humble-ros-gz`) using `rosdep`.
 
 ```bash
 cd docker/laptop

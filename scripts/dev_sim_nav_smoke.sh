@@ -20,7 +20,7 @@ source "$HBOT_WS/scripts/ros_env.sh" 2>/dev/null; ros2 launch hbot_bringup hbot_
     enable_navigation:=True run_rviz:=False headless:=True \
     > "$LOG" 2>&1 &
 LAUNCH_PID=$!
-trap 'kill $LAUNCH_PID 2>/dev/null; pkill -f gzserver; pkill -f cartographer; pkill -f "component_container|controller_server|planner_server|bt_navigator|behavior_server|velocity_smoother|lifecycle_manager"; pkill -f robot_state_publisher; pkill -f spawn_entity' EXIT
+trap 'kill $LAUNCH_PID 2>/dev/null; pkill -f "ign gazebo|gz sim"; pkill -f parameter_bridge; pkill -f cartographer; pkill -f "component_container|controller_server|planner_server|bt_navigator|behavior_server|velocity_smoother|lifecycle_manager"; pkill -f robot_state_publisher' EXIT
 
 sleep "$WARMUP"
 

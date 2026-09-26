@@ -22,7 +22,7 @@ ros2 launch hbot_bringup hbot_bringup.launch.py \
     map:="$MAP" enable_navigation:=True run_rviz:=False headless:=True \
     > "$LOG" 2>&1 &
 LP=$!
-trap 'kill $LP 2>/dev/null; pkill -f gzserver; pkill -f "amcl|map_server|controller_server|planner_server|bt_navigator|behavior_server|velocity_smoother|lifecycle_manager"; pkill -f robot_state_publisher; pkill -f spawn_entity' EXIT
+trap 'kill $LP 2>/dev/null; pkill -f "ign gazebo|gz sim"; pkill -f parameter_bridge; pkill -f "amcl|map_server|controller_server|planner_server|bt_navigator|behavior_server|velocity_smoother|lifecycle_manager"; pkill -f robot_state_publisher' EXIT
 sleep "$WARMUP"
 
 echo; echo "== nodes =="; ros2 node list | sort

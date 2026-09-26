@@ -22,14 +22,15 @@ nguyên vẹn khi lên phần cứng.
 ## 1. Kiến trúc mô phỏng
 
 ```
-                 ┌───────────────────────────── Gazebo (gzserver) ─────────────────────────────┐
+                 ┌──────────────────── Gazebo Sim (ign gazebo / gz sim) ───────────────────────┐
                  │  world: hbot_house.world                                                    │
-                 │  robot: spawn từ topic /robot_description (URDF sinh ra từ xacro)            │
-                 │  plugin libgazebo_ros_diff_drive  ──► /odom,  TF odom → base_footprint       │
-                 │  sensor ray (lidar)               ──► /scan  (frame: laser)                  │
-                 │  sensor imu                       ──► /imu   (frame: imu_link)               │
+                 │  robot: spawn từ topic /robot_description (ros_gz_sim create)               │
+                 │  system DiffDrive + JointStatePublisher ──► odom, tf, joint_states          │
+                 │  sensor gpu_lidar                 ──► scan   (frame: laser)                  │
+                 │  sensor imu                       ──► imu    (frame: imu_link)               │
                  └───────────────▲───────────────────────────────────┬────────────────────────┘
-                                 │ /cmd_vel                          │ /scan /odom
+                                 │ ros_gz_bridge (config/gz_bridge.yaml): gz topic ⇄ ROS topic │
+                                 │ /cmd_vel                          │ /scan /odom /tf /clock
                                  │                                   ▼
         ┌────────────────┐   ┌───┴────────────┐         ┌──────────────────────────────┐
         │ teleop / joy   │──►│  (nav) Nav2    │────────►│  SLAM  hoặc  Localization     │
@@ -43,7 +44,7 @@ nguyên vẹn khi lên phần cứng.
 ### Cây TF (giống robot thật)
 
 ```
-map ──(Cartographer hoặc AMCL)──► odom ──(Gazebo diff_drive)──► base_footprint
+map ──(Cartographer hoặc AMCL)──► odom ──(gz DiffDrive)──► base_footprint
                                                                      │ (robot_state_publisher, tĩnh)
                                                     ┌────────────────┼─────────────────┐
                                                  base_link        (== base_footprint)
@@ -57,10 +58,10 @@ map ──(Cartographer hoặc AMCL)──► odom ──(Gazebo diff_drive)─�
 
 | Topic | Kiểu | Nguồn |
 |---|---|---|
-| `/scan` | `sensor_msgs/LaserScan` | Gazebo ray sensor (mô phỏng YDLidar X3, 360°, 10 Hz, 0.12–12 m) |
-| `/odom` | `nav_msgs/Odometry` | plugin diff-drive của Gazebo |
-| `/imu` | `sensor_msgs/Imu` | Gazebo IMU sensor |
-| `/cmd_vel` | `geometry_msgs/Twist` | Nav2 (hoặc teleop) → plugin diff-drive |
+| `/scan` | `sensor_msgs/LaserScan` | gz `gpu_lidar` qua ros_gz_bridge (mô phỏng YDLidar X3: `lidar_sensor` trong `hbot_geometry.yaml`) |
+| `/odom` | `nav_msgs/Odometry` | system DiffDrive của gz sim (qua bridge) |
+| `/imu` | `sensor_msgs/Imu` | gz IMU sensor (qua bridge) |
+| `/cmd_vel` | `geometry_msgs/Twist` | Nav2 (hoặc teleop) → bridge → DiffDrive |
 | `/map` | `nav_msgs/OccupancyGrid` | Cartographer (mapping) hoặc `map_server` (localization) |
 | `/tf`, `/tf_static` | `tf2_msgs/TFMessage` | Gazebo + `robot_state_publisher` + SLAM/AMCL |
 
@@ -73,9 +74,13 @@ map ──(Cartographer hoặc AMCL)──► odom ──(Gazebo diff_drive)─�
 
 ## 2. Chuẩn bị (build workspace)
 
-Yêu cầu: **Ubuntu 22.04 + ROS 2 Humble + Gazebo Classic**, đã cài
-`ros-humble-cartographer-ros`, `ros-humble-gazebo-ros-pkgs`,
-`ros-humble-gazebo-plugins`.
+Yêu cầu: **Ubuntu 22.04 + ROS 2 Humble + Gazebo Sim Fortress** (`ros-humble-ros-gz`,
+kéo theo Fortress), đã cài `ros-humble-cartographer-ros`. Gazebo Classic không
+còn được dùng (xem `src/hbot_simulation/README.md`).
+
+```bash
+sudo apt install ros-humble-ros-gz ros-humble-cartographer-ros
+```
 
 ```bash
 cd ~/Documents/03.MyProjects/hbot_ws-sim-parity     # thư mục workspace
@@ -265,7 +270,7 @@ ros2 action send_goal /navigate_through_poses nav2_msgs/action/NavigateThroughPo
 | `enable_navigation` | `False` | `True` = bật ngăn xếp Nav2 (controller/planner/BT/...) |
 | `map` | `…/maps/hbot_house_sim.yaml` | File map YAML cho `slam:=False` |
 | `run_rviz` | `False` | Mở RViz với cấu hình `config/hbot.rviz` |
-| `headless` | `False` | `True` = chạy `gzserver` không GUI (không mở `gzclient`) |
+| `headless` | `False` | `True` = chỉ chạy server gz sim (`-s --headless-rendering`), không mở GUI |
 | `params_file` | `config/nav2_params.yaml` | Tham số Nav2 |
 | `slam_params_file` | `config/slam_params.yaml` | (chỉ dùng nếu bật lại nhánh slam_toolbox) |
 
@@ -311,7 +316,8 @@ Ví dụ:
 | AMCL không phát `map→odom` | Chưa đặt *2D Pose Estimate* / chưa publish `/initialpose`. |
 | `Invalid frame ID "odom" ... frame does not exist` (vài giây đầu) | Bình thường — Gazebo mất ~2–3 s mới phát `odom→base_footprint`. Tự hết. |
 | `ros2` không thấy topic nào | Sai `ROS_DOMAIN_ID`. Chạy `export ROS_DOMAIN_ID=9` (hoặc `source scripts/ros_env.sh`). |
-| Gazebo mở nhưng đen/không robot | X11/GPU. Thử `headless:=True` để tách vấn đề, hoặc kiểm tra `/dev/dri`. |
+| Gazebo mở nhưng đen/không robot | X11/GPU (gz sim cần OpenGL 3.3 cho ogre2). Thử `headless:=True` để tách vấn đề, hoặc kiểm tra `/dev/dri`. |
+| Có `/clock` nhưng không có `/scan`/`/odom` | Bridge chưa chạy hoặc tên topic gz lệch: `ign topic -l` (Harmonic: `gz topic -l`) phải có `/scan`, `/odom`; so với `config/gz_bridge.yaml`. |
 
 ---
 
@@ -329,7 +335,7 @@ robot thật (`hbot_bringup/config/hbot.urdf`) và tham số driver
 | `base_footprint → base_link` | trùng nhau (0,0,0) | giống robot thật |
 | `base_link → laser` | `x=0.08, z=0.14`, không xoay yaw | giống robot thật |
 | `base_link → imu_link` | (0,0,0) | giống robot thật |
-| Lidar mô phỏng | YDLidar X3: 360°, 10 Hz, 0.12–12 m | Gazebo ray sensor |
+| Lidar mô phỏng | YDLidar X3: 360°, 8 Hz, 0.12–8 m | gz `gpu_lidar` |
 | Footprint Nav2 | chữ nhật `0.18 × 0.24 m` | `nav2_params.yaml`, không dùng `robot_radius` |
 | Bộ điều khiển local | Regulated Pure Pursuit (RPP) | `desired_linear_vel: 0.2` |
 | SLAM | Cartographer (`carto_mapping.lua`) | tracking frame `base_footprint` |

@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y \
     x11-apps \
     mesa-utils \
     python3-pip \
-    ros-humble-gazebo-plugins \
     ros-humble-ros-gz \
     python3-lxml \
     && rm -rf /var/lib/apt/lists/*

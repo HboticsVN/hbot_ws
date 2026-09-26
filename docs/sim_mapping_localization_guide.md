@@ -38,9 +38,9 @@ Mô hình URDF trong sim được đồng bộ với URDF robot thật
 
 | | Robot thật | Sim |
 |---|---|---|
-| `/odom` + TF `odom→base_footprint` | driver Yahboom + EKF `robot_localization` | plugin diff-drive của Gazebo phát trực tiếp (không chạy EKF) |
+| `/odom` + TF `odom→base_footprint` | driver Yahboom + EKF `robot_localization` | system DiffDrive của gz sim phát trực tiếp qua ros_gz_bridge (không chạy EKF) |
 | Trọng tài `/cmd_vel` | `twist_mux` trong `base_bringup.launch.py` (teleop ⇄ Nav2) | không có `twist_mux`; Nav2 ghi thẳng `/cmd_vel` |
-| Lidar | driver phần cứng (`ydlidar_x3` / `lds`) | Gazebo ray sensor; driver phần cứng được **bỏ qua** khi `simulation_mode:=True` |
+| Lidar | driver phần cứng (`ydlidar_x3` / `lds`) | gz `gpu_lidar`; driver phần cứng được **bỏ qua** khi `simulation_mode:=True` |
 
 > **Lưu ý:** phiên bản trước của sim có lỗi "gửi goal nhưng robot đứng im"
 > (do remap `cmd_vel_nav_smoothed` chỉ hợp lệ trên phần cứng). Lỗi này **đã
@@ -63,7 +63,7 @@ Launch file rẽ nhánh theo các cờ:
 | `enable_navigation` | `True`/`False` | Bật/tắt stack Nav2 (planner/controller/bt_navigator) |
 | `use_sim_time` | `True` | Dùng `/clock` của Gazebo – **luôn `True` khi `simulation_mode:=True`** |
 | `run_rviz` | `True`/`False` | Mở RViz với config `hbot.rviz` |
-| `headless` | `True`/`False` | `True` = chạy `gzserver` không GUI (máy yếu / CI). Mặc định `False` |
+| `headless` | `True`/`False` | `True` = chỉ chạy server gz sim, không GUI (máy yếu / CI). Mặc định `False` |
 | `map` | đường dẫn `.yaml` | Bản đồ cho `slam:=False`. Mặc định: map mẫu `hbot_house_sim.yaml` đi kèm |
 
 Thành phần theo chế độ:
@@ -109,7 +109,7 @@ conda deactivate 2>/dev/null                 # KHÔNG dùng Python của Conda/v
 > dùng trên phần cứng (EKF), không cần cho sim — bỏ qua:
 > `colcon build --packages-ignore robot_localization`
 > hoặc cài `sudo apt install ros-humble-geographic-msgs`.
-> Kiểm tra đủ package: `ros2 pkg prefix nav2_bringup cartographer_ros gazebo_ros`.
+> Kiểm tra đủ package: `ros2 pkg prefix nav2_bringup cartographer_ros ros_gz_sim ros_gz_bridge`.
 
 ### 2.3. Source workspace ở **mỗi** terminal mới
 
@@ -250,7 +250,7 @@ ros2 action send_goal /navigate_through_poses nav2_msgs/action/NavigateThroughPo
              {header: {frame_id: map}, pose: {position: {x: 0.5, y: 0.5}, orientation: {w: 1.0}}} ]}"
 ```
 
-**Tiêu chí đạt** (theo `PHASE0_RUNBOOK.md`): các node lên không crash;
+**Tiêu chí đạt** (theo `docs/phase0_runbook.md`): các node lên không crash;
 `/tf /odom /scan /cmd_vel` có dữ liệu đúng mode; robot đi được 5 waypoint
 liên tiếp trong sim.
 
@@ -321,8 +321,8 @@ ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
 | Lệnh | `simulation_mode:=True use_sim_time:=True` | `simulation_mode:=False use_sim_time:=False` |
 | Mapping | `slam:=True enable_navigation:=True` | giống hệt |
 | Localization | `slam:=False enable_navigation:=True` (map mẫu) | `slam:=False ... map:=/abs/đường/dẫn/map.yaml` (không có map mẫu) |
-| Nguồn `/odom` | plugin Gazebo | driver Yahboom + EKF |
-| Nguồn `/scan` | Gazebo ray sensor | driver YDLidar X3 (`LIDAR_MODEL=ydlidar_x3`) |
+| Nguồn `/odom` | gz DiffDrive (qua bridge) | driver Yahboom + EKF |
+| Nguồn `/scan` | gz `gpu_lidar` (qua bridge) | driver YDLidar X3 (`LIDAR_MODEL=ydlidar_x3`) |
 
 Vì cây TF, tham số Nav2 và bộ SLAM **giống nhau**, kỹ năng đặt initial pose,
 gửi goal, đọc costmap, tinh chỉnh `nav2_params.yaml` học trên sim áp dụng

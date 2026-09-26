@@ -1,5 +1,5 @@
 #!/bin/bash
-# Dev-only smoke test for the Gazebo simulation bring-up (headless).
+# Dev-only smoke test for the Gazebo Sim (gz sim) bring-up (headless).
 # Not wired into CI - a quick "does the sim still stand up" check while
 # iterating on the robot model / launch files.
 #
@@ -16,7 +16,7 @@ echo "== launching hbot_house.launch.py (headless) =="
 ros2 launch hbot_simulation hbot_house.launch.py headless:=true use_sim_time:=true \
     > "$LOG" 2>&1 &
 LAUNCH_PID=$!
-trap 'kill $LAUNCH_PID 2>/dev/null; pkill -f gzserver 2>/dev/null; pkill -f "spawn_entity" 2>/dev/null; pkill -f robot_state_publisher 2>/dev/null' EXIT
+trap 'kill $LAUNCH_PID 2>/dev/null; pkill -f "ign gazebo|gz sim" 2>/dev/null; pkill -f parameter_bridge 2>/dev/null; pkill -f "ros_gz_sim/create" 2>/dev/null; pkill -f robot_state_publisher 2>/dev/null' EXIT
 
 sleep "$RUN_SECS"
 

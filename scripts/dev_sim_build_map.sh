@@ -22,7 +22,7 @@ ros2 launch hbot_bringup hbot_bringup.launch.py \
     enable_navigation:=False run_rviz:=False headless:=True \
     > "$LOG" 2>&1 &
 LP=$!
-trap 'kill $LP 2>/dev/null; pkill -f gzserver; pkill -f cartographer; pkill -f robot_state_publisher; pkill -f spawn_entity' EXIT
+trap 'kill $LP 2>/dev/null; pkill -f "ign gazebo|gz sim"; pkill -f parameter_bridge; pkill -f cartographer; pkill -f robot_state_publisher' EXIT
 sleep 25
 
 pub() { timeout "$2" ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "$1" >/dev/null 2>&1; }
